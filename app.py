@@ -1,177 +1,227 @@
 import streamlit as st
-import time
-import random
 import requests
 import pandas as pd
 import numpy as np
+import time
+import random
 
-# --- CONFIGURATION DE LA PAGE ---
+# --- 1. CONFIGURATION DU SITE ---
 st.set_page_config(
-    page_title="Sentinel Market AI",
-    page_icon="⚡",
-    layout="wide"
+    page_title="Blishko Trades",
+    page_icon="💎",
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
-# Custom CSS pour le look "Dark Mode Finance"
+# --- 2. STYLE & TYPOGRAPHIE (CSS AVANCÉ) ---
 st.markdown("""
 <style>
-    .stApp { background-color: #0E1117; color: white; }
-    div[data-testid="stMetricValue"] { font-family: monospace; }
-    .sentiment-box {
-        padding: 10px; border-radius: 5px; text-align: center; margin-top: 10px; font-weight: bold;
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700&display=swap');
+
+    html, body, [class*="css"]  {
+        font-family: 'Outfit', sans-serif;
+        background-color: #0E1117;
+    }
+    
+    /* Titre Principal */
+    h1 {
+        font-weight: 700;
+        letter-spacing: -1px;
+        color: #ffffff;
+        text-align: center;
+        margin-bottom: 30px;
+    }
+
+    /* Cards */
+    .metric-card {
+        background-color: #1c1f26;
+        padding: 20px;
+        border-radius: 12px;
+        border: 1px solid #2d3342;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        margin-bottom: 20px;
+    }
+
+    /* Sentiment Bar Container */
+    .stProgress > div > div > div > div {
+        background-image: linear-gradient(to right, #ef4444, #eab308, #22c55e);
+    }
+    
+    /* Navigation Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 20px;
+        justify-content: center;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #1c1f26;
+        border-radius: 8px;
+        padding: 10px 30px;
+        color: white;
+        border: 1px solid #333;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #2962ff !important;
+        border-color: #2962ff !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ Sentinel Market AI")
-st.markdown("### Analyse Prix & Sentiment (Twitter/News) en Temps Réel")
+st.title("BLISHKO TRADES")
 
-# --- FONCTIONS ---
+# --- 3. GESTION DES DONNÉES (SESSION STATE) ---
+# On initialise les prix et l'historique s'ils n'existent pas
+if 'history' not in st.session_state:
+    st.session_state.history = {
+        # Crypto
+        'BTC': [], 'XRP': [], 'RENDER': [],
+        # Bourse
+        'MSFT': [], 'GOOGL': [], 'GOLD': []
+    }
+
+if 'prices' not in st.session_state:
+    st.session_state.prices = {
+        'MSFT': 402.50, 'GOOGL': 173.20, 'GOLD': 2045.00
+    }
+
+# --- 4. FONCTIONS DE RÉCUPERATION ---
 
 def get_binance_price(symbol):
-    """Récupère le vrai prix depuis Binance"""
+    """Récupère le prix réel sur Binance"""
     try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
-        response = requests.get(url)
-        data = response.json()
-        return float(data['price'])
+        # Binance API pour obtenir le prix
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT"
+        response = requests.get(url, timeout=2)
+        if response.status_code == 200:
+            return float(response.json()['price'])
+        return None
     except:
-        return 0.0
+        return None
 
-def simulate_stock_price(current_price):
-    """Simule un mouvement boursier (car les API boursières temps réel sont payantes)"""
-    change = (random.random() - 0.5) * 0.5
-    return current_price + change
+def simulate_market_move(current_price, volatility=0.0005):
+    """Simule un mouvement boursier réaliste (Random Walk)"""
+    change_percent = np.random.normal(0, volatility)
+    return current_price * (1 + change_percent)
 
-def analyze_sentiment_ai(symbol, price_change):
+def calculate_stable_sentiment(history_list):
     """
-    C'est ici que tu mettras ton IA plus tard.
-    Pour l'instant, on simule une IA qui réagit à la volatilité.
+    Calcule un score stable (1-100) basé sur l'historique complet
+    plutôt que sur la dernière seconde.
     """
-    # Base score aléatoire autour de 50
-    score = 50 + (random.randint(-5, 5)) 
+    if len(history_list) < 10:
+        return 50 # Neutre au début
     
-    # Si le prix monte, l'IA détecte de l'euphorie (FOMO)
-    if price_change > 0:
-        score += random.randint(5, 15)
-    else:
-        score -= random.randint(5, 15)
+    # On compare le prix actuel avec la moyenne des 10 dernières mesures
+    # Cela lisse le résultat (Moyenne Mobile)
+    current = history_list[-1]
+    average = sum(history_list[-10:]) / 10
+    
+    diff_percent = ((current - average) / average) * 1000 # Amplification
+    
+    # Base score 50 + variation
+    score = 50 + diff_percent
+    
+    # Ajout d'une inertie pour éviter les sauts brusques
+    noise = random.uniform(-2, 2)
+    final_score = score + noise
+    
+    return int(max(1, min(100, final_score)))
+
+def display_asset(name, symbol, price, history, is_crypto=True):
+    """Affiche une carte complète pour un actif"""
+    
+    # Calcul variation
+    prev_price = history[-2] if len(history) > 1 else price
+    delta = price - prev_price
+    delta_percent = (delta / prev_price) * 100
+    
+    color = "green" if delta >= 0 else "red"
+    
+    with st.container():
+        st.markdown(f"""
+        <div class="metric-card">
+            <h3 style="margin:0; color:#aaa;">{name}</h3>
+            <h2 style="margin:0; font-size: 2em;">${price:,.4f}</h2>
+            <p style="color:{color}; margin:0;">{delta:+.4f} ({delta_percent:+.2f}%)</p>
+        </div>
+        """, unsafe_allow_html=True)
         
-    # Bornes 1-100
-    score = max(1, min(100, score))
+        # Graphique
+        if len(history) > 2:
+            chart_data = pd.DataFrame(history, columns=["Prix"])
+            st.line_chart(chart_data, height=150, use_container_width=True)
+        
+        # Score de Sentiment Stable
+        score = calculate_stable_sentiment(history)
+        
+        st.write(f"**Indice de Confiance Marché : {score}/100**")
+        st.progress(score)
+        
+        # Interprétation textuelle simple
+        txt = "Neutre"
+        if score > 60: txt = "Achat Fort (Bullish)"
+        elif score < 40: txt = "Vente Forte (Bearish)"
+        st.caption(f"Analyse: {txt} - Basé sur la tendance récente.")
+        st.markdown("---")
+
+# --- 5. LOGIQUE PRINCIPALE & BOUCLE ---
+
+# Création des onglets (Les "Deux Carrés")
+tab_crypto, tab_bourse = st.tabs(["₿ MARCHÉ CRYPTO", "📈 BOURSE & ACTIONS"])
+
+# --- Mise à jour des données (Backend) ---
+# Crypto (Binance)
+btc = get_binance_price("BTC")
+xrp = get_binance_price("XRP")
+render = get_binance_price("RENDER") # Attention: RNDR est devenu RENDER sur Binance
+
+# Si Binance ne répond pas (bug API), on prend la dernière valeur
+if btc: st.session_state.history['BTC'].append(btc)
+if xrp: st.session_state.history['XRP'].append(xrp)
+if render: st.session_state.history['RENDER'].append(render)
+
+# Bourse (Simulation)
+st.session_state.prices['MSFT'] = simulate_market_move(st.session_state.prices['MSFT'])
+st.session_state.prices['GOOGL'] = simulate_market_move(st.session_state.prices['GOOGL'])
+st.session_state.prices['GOLD'] = simulate_market_move(st.session_state.prices['GOLD'], volatility=0.0002) # Or moins volatile
+
+st.session_state.history['MSFT'].append(st.session_state.prices['MSFT'])
+st.session_state.history['GOOGL'].append(st.session_state.prices['GOOGL'])
+st.session_state.history['GOLD'].append(st.session_state.prices['GOLD'])
+
+# Limite de l'historique (garder les 100 derniers points pour ne pas saturer la mémoire)
+for key in st.session_state.history:
+    if len(st.session_state.history[key]) > 100:
+        st.session_state.history[key].pop(0)
+
+# --- Affichage Frontend ---
+
+with tab_crypto:
+    col1, col2, col3 = st.columns(3)
     
-    # Génération d'une phrase d'analyse factice
-    phrases = [
-        "Scan Twitter: Forte activité...", 
-        "Reddit: Les traders sont inquiets...", 
-        "News: Rumeur d'achat institutionnel...", 
-        "Analyse technique: Support touché...",
-        "Volatilité anormale détectée..."
-    ]
-    log = random.choice(phrases)
+    with col1:
+        current_btc = st.session_state.history['BTC'][-1] if st.session_state.history['BTC'] else 0
+        display_asset("Bitcoin (BTC)", "BTC", current_btc, st.session_state.history['BTC'])
+        
+    with col2:
+        current_xrp = st.session_state.history['XRP'][-1] if st.session_state.history['XRP'] else 0
+        display_asset("Ripple (XRP)", "XRP", current_xrp, st.session_state.history['XRP'])
+        
+    with col3:
+        current_rndr = st.session_state.history['RENDER'][-1] if st.session_state.history['RENDER'] else 0
+        display_asset("Render (RNDR)", "RENDER", current_rndr, st.session_state.history['RENDER'])
+
+with tab_bourse:
+    col_a, col_b, col_c = st.columns(3)
     
-    return score, log
+    with col_a:
+        display_asset("Microsoft (MSFT)", "MSFT", st.session_state.prices['MSFT'], st.session_state.history['MSFT'], is_crypto=False)
+        
+    with col_b:
+        display_asset("Alphabet A (GOOGL)", "GOOGL", st.session_state.prices['GOOGL'], st.session_state.history['GOOGL'], is_crypto=False)
+        
+    with col_c:
+        display_asset("Or (Gold / XAU)", "GOLD", st.session_state.prices['GOLD'], st.session_state.history['GOLD'], is_crypto=False)
 
-def display_sentiment_bar(score, log):
-    """Affiche ta barre de sentiment 0-100"""
-    color = "red"
-    if score > 40: color = "orange"
-    if score > 60: color = "green"
-    
-    st.progress(score)
-    st.markdown(f"""
-    <div class="sentiment-box" style="border: 1px solid {color}; color: {color};">
-        SCORE IA: {score}/100 <br>
-        <span style="font-size:0.8em; color: #888;">{log}</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-# --- INITIALISATION DES VARIABLES (SESSION STATE) ---
-if 'tsla_price' not in st.session_state:
-    st.session_state.tsla_price = 240.50
-if 'aapl_price' not in st.session_state:
-    st.session_state.aapl_price = 185.20
-if 'history' not in st.session_state:
-    st.session_state.history = {'BTC': [], 'ETH': [], 'TSLA': [], 'AAPL': []}
-
-# --- BOUCLE PRINCIPALE ---
-# Création des colonnes
-col1, col2, col3, col4 = st.columns(4)
-
-# Placeholders (zones vides qu'on va remplir à chaque seconde)
-with col1:
-    st.markdown("### ₿ Bitcoin")
-    btc_metric = st.empty()
-    btc_chart = st.empty()
-    btc_sentiment = st.empty()
-
-with col2:
-    st.markdown("### Ξ Ethereum")
-    eth_metric = st.empty()
-    eth_chart = st.empty()
-    eth_sentiment = st.empty()
-
-with col3:
-    st.markdown("### 🚗 Tesla (Sim)")
-    tsla_metric = st.empty()
-    tsla_chart = st.empty()
-    tsla_sentiment = st.empty()
-
-with col4:
-    st.markdown("### 🍎 Apple (Sim)")
-    aapl_metric = st.empty()
-    aapl_chart = st.empty()
-    aapl_sentiment = st.empty()
-
-# Boucle d'actualisation infinie
-while True:
-    # 1. Récupération des Données
-    btc_price = get_binance_price("BTCUSDT")
-    eth_price = get_binance_price("ETHUSDT")
-    
-    st.session_state.tsla_price = simulate_stock_price(st.session_state.tsla_price)
-    st.session_state.aapl_price = simulate_stock_price(st.session_state.aapl_price)
-
-    # Mise à jour historique pour les graphiques
-    for symbol, price in [('BTC', btc_price), ('ETH', eth_price), 
-                          ('TSLA', st.session_state.tsla_price), ('AAPL', st.session_state.aapl_price)]:
-        st.session_state.history[symbol].append(price)
-        if len(st.session_state.history[symbol]) > 30: # Garder les 30 dernières secondes
-            st.session_state.history[symbol].pop(0)
-
-    # 2. Affichage BTC
-    prev_btc = st.session_state.history['BTC'][-2] if len(st.session_state.history['BTC']) > 1 else btc_price
-    btc_diff = btc_price - prev_btc
-    btc_metric.metric("Prix", f"${btc_price:,.2f}", f"{btc_diff:.2f}")
-    btc_chart.line_chart(st.session_state.history['BTC'], height=150)
-    s_score, s_log = analyze_sentiment_ai("BTC", btc_diff)
-    with btc_sentiment.container():
-        display_sentiment_bar(s_score, s_log)
-
-    # 3. Affichage ETH
-    prev_eth = st.session_state.history['ETH'][-2] if len(st.session_state.history['ETH']) > 1 else eth_price
-    eth_diff = eth_price - prev_eth
-    eth_metric.metric("Prix", f"${eth_price:,.2f}", f"{eth_diff:.2f}")
-    eth_chart.line_chart(st.session_state.history['ETH'], height=150)
-    s_score, s_log = analyze_sentiment_ai("ETH", eth_diff)
-    with eth_sentiment.container():
-        display_sentiment_bar(s_score, s_log)
-
-    # 4. Affichage Tesla
-    tsla_diff = st.session_state.tsla_price - (st.session_state.history['TSLA'][-2] if len(st.session_state.history['TSLA']) > 1 else st.session_state.tsla_price)
-    tsla_metric.metric("Prix", f"${st.session_state.tsla_price:.2f}", f"{tsla_diff:.2f}")
-    tsla_chart.line_chart(st.session_state.history['TSLA'], height=150)
-    s_score, s_log = analyze_sentiment_ai("TSLA", tsla_diff)
-    with tsla_sentiment.container():
-        display_sentiment_bar(s_score, s_log)
-
-    # 5. Affichage Apple
-    aapl_diff = st.session_state.aapl_price - (st.session_state.history['AAPL'][-2] if len(st.session_state.history['AAPL']) > 1 else st.session_state.aapl_price)
-    aapl_metric.metric("Prix", f"${st.session_state.aapl_price:.2f}", f"{aapl_diff:.2f}")
-    aapl_chart.line_chart(st.session_state.history['AAPL'], height=150)
-    s_score, s_log = analyze_sentiment_ai("AAPL", aapl_diff)
-    with aapl_sentiment.container():
-        display_sentiment_bar(s_score, s_log)
-
-    # Pause de 1 seconde avant la prochaine boucle
-    time.sleep(1)
+# Boucle de rafraîchissement
+time.sleep(1.5) # Pause de 1.5 secondes
+st.rerun()      # Relance le script pour mettre à jour
