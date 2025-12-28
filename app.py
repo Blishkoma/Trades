@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- 2. CSS PRESTIGE & SIMULATEUR ---
+# --- 2. CSS PRESTIGE ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700;900&display=swap');
@@ -43,12 +43,12 @@ st.markdown("""
         text-transform: uppercase;
     }
 
-    /* KPI BOXES (Session & Global) */
+    /* KPI BOXES */
     .kpi-container {
         display: flex;
         justify-content: center;
         gap: 20px;
-        margin-bottom: 30px;
+        margin-bottom: 20px;
         flex-wrap: wrap;
     }
     
@@ -74,17 +74,7 @@ st.markdown("""
         font-weight: 700;
     }
 
-    /* SIMULATEUR (ET SI... ALORS...) */
-    .sim-container {
-        background: linear-gradient(145deg, #1a1a1a, #0d0d0d);
-        border-radius: 20px;
-        padding: 20px;
-        margin: 0 auto 40px auto;
-        max-width: 800px;
-        border: 1px solid #333;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-    }
-    
+    /* SIMULATEUR (Barre supprimée, juste le titre et le contenu) */
     .sim-title {
         font-size: 0.9rem;
         color: #666;
@@ -92,11 +82,12 @@ st.markdown("""
         margin-bottom: 15px;
         text-align: center;
         letter-spacing: 2px;
+        margin-top: 30px;
     }
 
     /* Inputs du simulateur stylisés */
     .stNumberInput input {
-        background-color: #000 !important;
+        background-color: #0d0d0d !important;
         color: white !important;
         border: 1px solid #333 !important;
         border-radius: 10px !important;
@@ -113,7 +104,7 @@ st.markdown("""
     .price-big { font-size: 3.8rem; font-weight: 700; line-height: 1; color: white; }
     .price-small { font-size: 1.5rem; font-weight: 400; color: #666; margin-left: 10px; }
     
-    /* BOUTONS TIMEFRAME */
+    /* BOUTONS TIMEFRAME & REFRESH */
     div.stButton > button {
         background-color: #1c1c1e;
         color: #888;
@@ -292,8 +283,14 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# --- NOUVEAU : SIMULATEUR DE GAINS (ET SI... ALORS...) ---
-st.markdown('<div class="sim-container">', unsafe_allow_html=True)
+# BOUTON RAFRAÎCHIR (Ajouté ici)
+col_btn1, col_btn2, col_btn3 = st.columns([2, 1, 2])
+with col_btn2:
+    if st.button("🔄 Rafraîchir la page"):
+        st.cache_data.clear()
+        st.rerun()
+
+# SIMULATEUR DE GAINS (SANS LA BARRE/BOÎTE, JUSTE LE CONTENU)
 st.markdown('<div class="sim-title">⚡ SIMULATEUR DE PROFITS INSTANTANÉ</div>', unsafe_allow_html=True)
 
 col_sim1, col_sim2, col_sim3 = st.columns([2, 1, 2], gap="medium")
@@ -317,15 +314,14 @@ with col_sim3:
     sign = "+" if gain_loss >= 0 else ""
     
     st.markdown(f"""
-    <div style="background:#000; border:1px solid #333; border-radius:10px; padding:10px; text-align:center;">
+    <div style="background:#0d0d0d; border:1px solid #333; border-radius:10px; padding:10px; text-align:center;">
         <div style="font-size:1.5rem; font-weight:bold;">{final_value:,.2f} €</div>
         <div style="font-size:1rem; color:{gain_color};">{sign}{gain_loss:,.2f} €</div>
     </div>
     """, unsafe_allow_html=True)
 
-st.markdown('</div>', unsafe_allow_html=True)
-
 # --- NAVIGATION PRINCIPALE ---
+st.markdown("---") # Séparateur discret
 col_nav1, col_nav2 = st.columns([1, 3])
 
 with col_nav1:
@@ -406,6 +402,6 @@ with col_nav2:
     else:
         st.error("Données indisponibles.")
 
-# --- 7. AUTO-REFRESH INTELLIGENT (30s) ---
+# --- 7. AUTO-REFRESH (30s) ---
 time.sleep(30)
 st.rerun()
