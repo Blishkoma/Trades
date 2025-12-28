@@ -124,6 +124,10 @@ st.markdown("""
         color: #0A84FF;
         border: 1px solid #0A84FF;
     }
+    div.stButton > button:active {
+        background-color: #0A84FF;
+        color: white;
+    }
 
     /* SENTIMENT BOX */
     .sentiment-container {
@@ -139,16 +143,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. CONFIGURATION DES DONNÉES (MISE À JOUR) ---
+# --- 3. CONFIGURATION DES DONNÉES ---
 
-# Panier mis à jour pour le calcul global (uniquement les actifs demandés)
-BASKET = ["BTC-USD", "XRP-USD", "RNDR-USD", "MSFT", "GOOGL", "GC=F"]
+# Mise à jour symboles (Render corrigé)
+BASKET = ["BTC-USD", "XRP-USD", "RENDER-USD", "MSFT", "GOOGL", "GC=F"]
 
 ASSETS = {
     "Cryptomonnaies": {
         "Bitcoin": "BTC-USD",
         "Ripple (XRP)": "XRP-USD",
-        "Render": "RNDR-USD"
+        "Render": "RENDER-USD" # Symbole corrigé pour éviter les erreurs
     },
     "Bourse & Actions": {
         "Microsoft": "MSFT",
@@ -180,12 +184,14 @@ def get_usd_eur_rate():
     except:
         return 0.95
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=60) # Cache standard
 def get_chart_data(symbol, period, interval):
     try:
-        df = yf.download(symbol, period=period, interval=interval, progress=False)
+        df = yf.download(symbol, period=period, interval=interval, progress=False, threads=True)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.droplevel(1)
+        if df.empty:
+            return pd.DataFrame()
         return df
     except:
         return pd.DataFrame()
@@ -197,13 +203,14 @@ def calculate_session_performance():
     total_change = 0
     count = 0
     try:
-        # On télécharge les données du panier restreint
         current_data = yf.download(BASKET, period="1d", interval="1m", progress=False)['Close'].iloc[-1]
         for symbol in BASKET:
             if symbol in st.session_state.init_prices:
                 start_p = st.session_state.init_prices[symbol]
-                try: curr_p = float(current_data[symbol].item())
-                except: curr_p = float(current_data[symbol])
+                # Gestion robuste des formats de données
+                val = current_data[symbol]
+                try: curr_p = float(val.item())
+                except: curr_p = float(val)
                 
                 if start_p > 0:
                     change = ((curr_p - start_p) / start_p) * 100
@@ -244,9 +251,10 @@ if 'init_prices' not in st.session_state:
     try:
         data = yf.download(BASKET, period="1d", interval="1m", progress=False)['Close'].iloc[-1]
         for symbol in BASKET:
-            try: val = float(data[symbol].item())
-            except: val = float(data[symbol])
-            st.session_state.init_prices[symbol] = val
+            val = data[symbol]
+            try: v = float(val.item())
+            except: v = float(val)
+            st.session_state.init_prices[symbol] = v
     except: pass
 
 # --- 6. INTERFACE ---
@@ -280,12 +288,15 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# BOUTON RAFRAÎCHIR
+# BOUTON RAFRAÎCHIR TURBO
 col_btn1, col_btn2, col_btn3 = st.columns([2, 1, 2])
 with col_btn2:
-    if st.button("🔄 Rafraîchir la page"):
-        st.cache_data.clear()
-        st.rerun()
+    # Ce bouton force le nettoyage du cache et confirme l'action
+    if st.button("🚀 FORCER L'ACTUALISATION", use_container_width=True):
+        st.cache_data.clear() # Vide le cache
+        st.toast("Données actualisées avec succès !", icon="✅") # Feedback visuel
+        time.sleep(0.5) # Petit délai pour l'animation
+        st.rerun() # Recharge la page
 
 # SIMULATEUR DE GAINS
 st.markdown('<div class="sim-title">⚡ SIMULATEUR DE PROFITS INSTANTANÉ</div>', unsafe_allow_html=True)
@@ -343,10 +354,18 @@ with col_nav2:
         rate_eur = get_usd_eur_rate()
     
     if not df.empty and 'Close' in df.columns:
-        try: cur_price_usd = float(df['Close'].iloc[-1].item())
-        except: cur_price_usd = float(df['Close'].iloc[-1])
-        try: open_price_usd = float(df['Open'].iloc[0].item())
-        except: open_price_usd = float(df['Open'].iloc[0])
+        # Logique robuste de récupération du dernier prix
+        try: 
+            raw_cur = df['Close'].iloc[-1]
+            try: cur_price_usd = float(raw_cur.item())
+            except: cur_price_usd = float(raw_cur)
+            
+            raw_open = df['Open'].iloc[0]
+            try: open_price_usd = float(raw_open.item())
+            except: open_price_usd = float(raw_open)
+        except:
+            st.error("Erreur de lecture des données.")
+            st.stop()
             
         cur_price_eur = cur_price_usd * rate_eur
         diff_usd = cur_price_usd - open_price_usd
@@ -397,8 +416,9 @@ with col_nav2:
         </div>
         """, unsafe_allow_html=True)
     else:
-        st.error("Données indisponibles.")
+        st.warning("Données indisponibles (Marché fermé ou limite atteinte). Utilisez le bouton 'Forcer l'actualisation'.")
 
-# --- 7. AUTO-REFRESH (15s) ---
-time.sleep(15)
+# --- 7. AUTO-REFRESH SÉCURISÉ (60s) ---
+# Délai de sécurité pour éviter le bannissement IP de Yahoo
+time.sleep(60)
 st.rerun()
