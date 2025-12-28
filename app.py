@@ -74,7 +74,7 @@ st.markdown("""
         font-weight: 700;
     }
 
-    /* SIMULATEUR (Barre supprimée, juste le titre et le contenu) */
+    /* SIMULATEUR */
     .sim-title {
         font-size: 0.9rem;
         color: #666;
@@ -85,7 +85,6 @@ st.markdown("""
         margin-top: 30px;
     }
 
-    /* Inputs du simulateur stylisés */
     .stNumberInput input {
         background-color: #0d0d0d !important;
         color: white !important;
@@ -104,7 +103,7 @@ st.markdown("""
     .price-big { font-size: 3.8rem; font-weight: 700; line-height: 1; color: white; }
     .price-small { font-size: 1.5rem; font-weight: 400; color: #666; margin-left: 10px; }
     
-    /* BOUTONS TIMEFRAME & REFRESH */
+    /* BOUTONS */
     div.stButton > button {
         background-color: #1c1c1e;
         color: #888;
@@ -140,23 +139,20 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. CONFIGURATION DES DONNÉES ---
+# --- 3. CONFIGURATION DES DONNÉES (MISE À JOUR) ---
 
-BASKET = ["BTC-USD", "ETH-USD", "AAPL", "MSFT", "TSLA"]
+# Panier mis à jour pour le calcul global (uniquement les actifs demandés)
+BASKET = ["BTC-USD", "XRP-USD", "RNDR-USD", "MSFT", "GOOGL", "GC=F"]
 
 ASSETS = {
     "Cryptomonnaies": {
         "Bitcoin": "BTC-USD",
-        "Ethereum": "ETH-USD",
-        "Ripple": "XRP-USD",
-        "Render": "RNDR-USD",
-        "Solana": "SOL-USD"
+        "Ripple (XRP)": "XRP-USD",
+        "Render": "RNDR-USD"
     },
     "Bourse & Actions": {
-        "Apple": "AAPL",
         "Microsoft": "MSFT",
-        "Alphabet": "GOOGL",
-        "Tesla": "TSLA",
+        "Alphabet (Google A)": "GOOGL",
         "Or (Gold)": "GC=F"
     }
 }
@@ -201,6 +197,7 @@ def calculate_session_performance():
     total_change = 0
     count = 0
     try:
+        # On télécharge les données du panier restreint
         current_data = yf.download(BASKET, period="1d", interval="1m", progress=False)['Close'].iloc[-1]
         for symbol in BASKET:
             if symbol in st.session_state.init_prices:
@@ -283,14 +280,14 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# BOUTON RAFRAÎCHIR (Ajouté ici)
+# BOUTON RAFRAÎCHIR
 col_btn1, col_btn2, col_btn3 = st.columns([2, 1, 2])
 with col_btn2:
     if st.button("🔄 Rafraîchir la page"):
         st.cache_data.clear()
         st.rerun()
 
-# SIMULATEUR DE GAINS (SANS LA BARRE/BOÎTE, JUSTE LE CONTENU)
+# SIMULATEUR DE GAINS
 st.markdown('<div class="sim-title">⚡ SIMULATEUR DE PROFITS INSTANTANÉ</div>', unsafe_allow_html=True)
 
 col_sim1, col_sim2, col_sim3 = st.columns([2, 1, 2], gap="medium")
@@ -321,7 +318,7 @@ with col_sim3:
     """, unsafe_allow_html=True)
 
 # --- NAVIGATION PRINCIPALE ---
-st.markdown("---") # Séparateur discret
+st.markdown("---") 
 col_nav1, col_nav2 = st.columns([1, 3])
 
 with col_nav1:
@@ -402,6 +399,6 @@ with col_nav2:
     else:
         st.error("Données indisponibles.")
 
-# --- 7. AUTO-REFRESH (30s) ---
-time.sleep(30)
+# --- 7. AUTO-REFRESH (15s) ---
+time.sleep(15)
 st.rerun()
