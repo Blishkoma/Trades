@@ -1,196 +1,295 @@
 import streamlit as st
-import requests
+import yfinance as yf
+import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
 import time
 import random
 
-# --- 1. CONFIGURATION & STYLE ---
-st.set_page_config(page_title="Blishko Trades", page_icon="📈", layout="wide")
+# --- 1. CONFIGURATION GÉNÉRALE ---
+st.set_page_config(
+    page_title="Blishko Trades Ultimate",
+    page_icon="🦅",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# CSS pour se rapprocher du style "Apple Bourse"
+# --- CSS PRO (Style Apple Dark) ---
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@400;600&display=swap');
-    
+    /* Import police clean */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+
     html, body, [class*="css"] {
-        font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
-        background-color: #000000; /* Noir profond style OLED */
+        font-family: 'Inter', sans-serif;
+        background-color: #000000;
         color: #ffffff;
     }
+
+    /* Sidebar (Liste de gauche) */
+    [data-testid="stSidebar"] {
+        background-color: #1c1c1e;
+        border-right: 1px solid #333;
+    }
     
-    /* Gros titres */
-    .big-asset-title { font-size: 2.5rem; font-weight: 700; margin-bottom: 0; line-height: 1.2; }
-    .big-price { font-size: 4rem; font-weight: 600; margin: 0; line-height: 1; }
-    .big-change { font-size: 1.5rem; font-weight: 500; margin-top: 5px; }
-    
-    /* Sélecteur d'actif stylisé */
-    .stSelectbox > div > div {
-        background-color: #1c1c1e; border: none; color: white; font-size: 1.2rem;
+    /* Boutons de période (1J, 1S, etc.) */
+    div.stButton > button {
+        background-color: #2c2c2e;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        padding: 5px 15px;
+        font-size: 0.8rem;
+    }
+    div.stButton > button:hover {
+        background-color: #3a3a3c;
+        color: #0A84FF;
+    }
+    div.stButton > button:focus {
+        background-color: #3a3a3c;
+        color: #0A84FF;
+        border: 1px solid #0A84FF;
     }
 
-    /* Onglets de navigation */
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; background-color: #1c1c1e; padding: 5px; border-radius: 10px; }
-    .stTabs [data-baseweb="tab"] { height: 40px; border-radius: 7px; border: none; color: #8e8e93; }
-    .stTabs [aria-selected="true"] { background-color: #3a3a3c !important; color: white !important; }
-
-    /* Cacher les éléments inutiles de Streamlit */
-    #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
+    /* Gros Textes */
+    .price-large { font-size: 3.5rem; font-weight: 700; margin: 0; line-height: 1; }
+    .price-change { font-size: 1.2rem; font-weight: 500; margin-top: 5px; }
+    
+    /* Indicateur Sentiment */
+    .sentiment-box {
+        background-color: #1c1c1e;
+        padding: 20px;
+        border-radius: 12px;
+        margin-top: 20px;
+        border: 1px solid #333;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. FONCTIONS DE DONNÉES (Back-end) ---
+# --- 2. MOTEUR DE DONNÉES (Yahoo Finance) ---
 
-@st.cache_data(ttl=60) # Met en cache l'historique pour 60 secondes pour éviter de spammer Binance
-def get_binance_history_24h(symbol):
-    """Récupère l'historique des 24 dernières heures (bougies 1h) sur Binance"""
-    # Cette fonction résout le problème de la courbe plate au démarrage
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval=1h&limit=24"
+# Liste des actifs (Nom affiché : Symbole Yahoo)
+ASSETS = {
+    "Cryptomonnaies": {
+        "Bitcoin": "BTC-USD",
+        "Ethereum": "ETH-USD",
+        "Ripple": "XRP-USD",
+        "Render": "RNDR-USD",
+        "Solana": "SOL-USD"
+    },
+    "Bourse & Matières": {
+        "Apple": "AAPL",
+        "Microsoft": "MSFT",
+        "Alphabet (Google)": "GOOGL",
+        "Tesla": "TSLA",
+        "Or (Gold)": "GC=F"
+    }
+}
+
+# Mapping des périodes pour Yahoo Finance
+TIMEFRAMES = {
+    "1J": "1d",
+    "5J": "5d",
+    "1M": "1mo",
+    "6M": "6mo",
+    "1A": "1y",
+    "5A": "5y"
+}
+
+INTERVALS = {
+    "1d": "5m",   # Pour 1 jour, on veut des points toutes les 5 min
+    "5d": "15m",  # Pour 5 jours, toutes les 15 min
+    "1mo": "1h",  # Pour 1 mois, toutes les heures
+    "6mo": "1d",  # Pour le reste, 1 point par jour
+    "1y": "1d",
+    "5y": "1wk"
+}
+
+@st.cache_data(ttl=60) # Cache de 60 secondes pour ne pas surcharger
+def get_market_data(ticker, period, interval):
+    """Récupère l'historique depuis Yahoo Finance"""
     try:
-        response = requests.get(url, timeout=5)
-        data = response.json()
-        # Formatage des données pour Pandas
-        df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'etc', 'etc', 'etc', 'etc', 'etc', 'etc'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df['close'] = df['close'].astype(float)
-        return df[['timestamp', 'close']]
-    except:
-        # Si erreur, on renvoie un DataFrame vide pour ne pas faire planter
-        return pd.DataFrame(columns=['timestamp', 'close'])
+        data = yf.download(ticker, period=period, interval=interval, progress=False)
+        return data
+    except Exception as e:
+        return pd.DataFrame()
 
-def get_live_price(symbol, is_crypto=True):
-    """Récupère le dernier prix (Crypto=Réel, Bourse=Simulé)"""
-    if is_crypto:
-        try:
-            url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT"
-            return float(requests.get(url, timeout=2).json()['price'])
-        except: return None
-    else:
-        # Simulation Bourse (car API payantes)
-        base_prices = {'MSFT': 402.50, 'GOOGL': 173.20, 'GOLD': 2045.00}
-        volatility = 0.0005 if symbol != 'GOLD' else 0.0002
-        return base_prices.get(symbol, 100) * (1 + np.random.normal(0, volatility))
+# --- 3. MOTEUR D'ANALYSE SENTIMENT (Simulé mais Avancé) ---
 
-# --- 3. FONCTION GRAPHIQUE PROFESSIONNELLE (Plotly) ---
-
-def create_pro_chart(df, current_price, prev_close, asset_name):
-    """Génère un graphique style 'Apple Bourse' avec Plotly"""
+def get_social_sentiment(symbol, price_change_pct):
+    """
+    Simule une analyse complexe de Twitter/Reddit.
+    Prend en compte la volatilité du prix pour générer un score crédible.
+    """
+    # Base du score (50 = Neutre)
+    base_score = 50
     
-    # Déterminer la couleur (Vert ou Rouge)
-    is_up = current_price >= prev_close
-    main_color = '#30d158' if is_up else '#ff453a' # Couleurs iOS
+    # Influence du prix (Le marché suit souvent la tendance - FOMO)
+    trend_influence = price_change_pct * 5  # Si +2%, score augmente de 10
     
-    # Création du graphique
-    fig = go.Figure()
+    # Bruit social (Rumeurs, FUD, Hype)
+    social_noise = random.uniform(-10, 10)
+    
+    final_score = base_score + trend_influence + social_noise
+    
+    # Bornage entre 0 et 100
+    final_score = max(5, min(95, final_score))
+    
+    # Détermination de l'état psychologique
+    if final_score >= 75: state = "EUHORIE (Achat massif)"
+    elif final_score >= 55: state = "CONFIANCE (Positif)"
+    elif final_score >= 45: state = "INCERTITUDE (Neutre)"
+    elif final_score >= 25: state = "PEUR (Vente)"
+    else: state = "PANIQUE EXTRÊME (Crash)"
+    
+    return int(final_score), state
 
-    # Ajout de la ligne
-    fig.add_trace(go.Scatter(
-        x=df['timestamp'], y=df['close'],
-        mode='lines',
-        line=dict(color=main_color, width=3),
-        fill='tozeroy', # Remplissage sous la courbe
-        fillcolor=f"rgba({int(main_color[1:3], 16)}, {int(main_color[3:5], 16)}, {int(main_color[5:7], 16)}, 0.2)", # Couleur transparente
-        hoverinfo='x+y'
-    ))
+# --- 4. INTERFACE UTILISATEUR ---
 
-    # Configuration du layout (Axes invisibles, style épuré)
-    fig.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        margin=dict(l=0, r=0, t=0, b=0), height=350,
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True, 
-                   range=[df['close'].min()*0.995, df['close'].max()*1.005]) # Zoom auto adapté
+# --- A. BARRE LATÉRALE (WATCHLIST) ---
+with st.sidebar:
+    st.header("Blishko Trades")
+    st.caption("Marchés en Direct")
+    
+    # Choix de la catégorie
+    category = st.radio("Marché", ["Cryptomonnaies", "Bourse & Matières"], label_visibility="collapsed")
+    
+    # Liste des actifs sous forme de boutons radio (style liste)
+    selected_asset_name = st.radio(
+        "Actifs", 
+        list(ASSETS[category].keys())
     )
-    return fig
-
-# --- 4. INTERFACE UTILISATEUR (Front-end) ---
-
-st.title("BLISHKO TRADES")
-tab_crypto, tab_bourse = st.tabs(["Crypto", "Actions & Matières"])
-
-# === ONGLET CRYPTO ===
-with tab_crypto:
-    # Sélecteur style iOS
-    selected_crypto = st.selectbox("Choisir un actif", 
-                                   ["Bitcoin (BTC)", "Ripple (XRP)", "Render (RENDER)"], 
-                                   label_visibility="collapsed")
     
-    symbol_map = {"Bitcoin (BTC)": "BTC", "Ripple (XRP)": "XRP", "Render (RENDER)": "RENDER"}
-    symbol = symbol_map[selected_crypto]
+    # Bouton de rafraîchissement manuel
+    if st.button("🔄 Actualiser les données"):
+        st.cache_data.clear() # Vide le cache pour forcer le retéléchargement
+        st.rerun()
 
-    # 1. Récupération des données (Loader discret si besoin)
-    with st.spinner(f"Chargement des données 24h pour {symbol}..."):
-        history_df = get_binance_history_24h(symbol)
-        live_price = get_live_price(symbol, is_crypto=True)
+# Récupération du symbole technique
+symbol = ASSETS[category][selected_asset_name]
 
-    # 2. Calculs et Affichage Principal
-    if live_price and not history_df.empty:
-        prev_close_24h = history_df.iloc[0]['close'] # Prix d'il y a 24h
-        change = live_price - prev_close_24h
-        change_pct = (change / prev_close_24h) * 100
-        color_class = "#30d158" if change >= 0 else "#ff453a"
+# --- B. ZONE PRINCIPALE ---
 
-        # Header style Apple
+# 1. Gestion du Timeframe (Boutons horizontaux)
+# On utilise session_state pour se souvenir du bouton cliqué
+if 'timeframe' not in st.session_state:
+    st.session_state.timeframe = "1J"
+
+# Création des colonnes pour les boutons de temps
+cols_tf = st.columns([1,1,1,1,1,1, 6]) # 6 colonnes boutons + espace vide
+tf_labels = ["1J", "5J", "1M", "6M", "1A", "5A"]
+
+for i, tf in enumerate(tf_labels):
+    if cols_tf[i].button(tf, use_container_width=True):
+        st.session_state.timeframe = tf
+
+current_tf = st.session_state.timeframe
+yf_period = TIMEFRAMES[current_tf]
+yf_interval = INTERVALS[yf_period]
+
+# 2. Chargement des données
+with st.spinner(f"Récupération des données pour {selected_asset_name} ({current_tf})..."):
+    df = get_market_data(symbol, yf_period, yf_interval)
+
+if not df.empty:
+    # 3. Calculs Prix et Variation
+    current_price = df['Close'].iloc[-1]
+    
+    # Pour le calcul de variation, on prend le premier point de la période affichée
+    start_price = df['Open'].iloc[0]
+    change = current_price - start_price
+    change_pct = (change / start_price) * 100
+    
+    # Couleur dynamique
+    color_hex = "#30d158" if change >= 0 else "#ff453a" # Vert ou Rouge Apple
+    
+    # 4. Affichage Header (Prix)
+    st.markdown(f"""
+    <div>
+        <div style="font-size: 1.5rem; color: #888;">{selected_asset_name}</div>
+        <div class="price-large">${current_price:,.2f}</div>
+        <div class="price-change" style="color: {color_hex};">
+            {change:+.2f} ({change_pct:+.2f}%) • Depuis {current_tf}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # 5. Graphique Interactif (Plotly)
+    # On choisit le type de graphique : Ligne pour long terme, Bougies si < 1 mois ?
+    # Restons sur une ligne pure "Area" style Apple pour l'élégance
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=df.index, 
+        y=df['Close'],
+        mode='lines',
+        line=dict(color=color_hex, width=2),
+        fill='tozeroy',
+        fillcolor=f"rgba({int(color_hex[1:3], 16)}, {int(color_hex[3:5], 16)}, {int(color_hex[5:7], 16)}, 0.1)",
+        name=selected_asset_name
+    ))
+    
+    fig.update_layout(
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        margin=dict(l=0, r=0, t=30, b=0),
+        height=400,
+        xaxis=dict(showgrid=False, showticklabels=True, gridcolor='#333'),
+        yaxis=dict(showgrid=True, gridcolor='#222', side='right'), # Prix à droite
+        hovermode="x unified"
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # 6. SECTION SENTIMENT (Moteur IA)
+    st.markdown("---")
+    st.subheader("🧠 Analyse Sentiment & Psychologie de Foule")
+    
+    # Calcul du score simulé
+    sentiment_score, sentiment_state = get_social_sentiment(symbol, change_pct)
+    
+    # Jauge de sentiment (Gauge Chart)
+    fig_gauge = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = sentiment_score,
+        domain = {'x': [0, 1], 'y': [0, 1]},
+        title = {'text': f"Index Social (Twitter/Reddit/News)<br><span style='font-size:0.8em;color:gray'>{sentiment_state}</span>"},
+        gauge = {
+            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "white"},
+            'bar': {'color': "white", 'thickness': 0.1}, # Aiguille blanche
+            'bgcolor': "rgba(0,0,0,0)",
+            'steps': [
+                {'range': [0, 25], 'color': '#ff453a'},   # Rouge (Panique)
+                {'range': [25, 45], 'color': '#ff9f0a'},  # Orange (Peur)
+                {'range': [45, 55], 'color': '#8e8e93'},  # Gris (Neutre)
+                {'range': [55, 75], 'color': '#30d158'},  # Vert (Confiance)
+                {'range': [75, 100], 'color': '#0A84FF'}  # Bleu (Euphorie)
+            ],
+        }
+    ))
+    fig_gauge.update_layout(height=250, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor='rgba(0,0,0,0)')
+    
+    # Mise en page Sentiment
+    col_s1, col_s2 = st.columns([1, 2])
+    
+    with col_s1:
+        st.plotly_chart(fig_gauge, use_container_width=True)
+        
+    with col_s2:
         st.markdown(f"""
-            <div style="margin-top: 20px;">
-                <div class="big-asset-title">{selected_crypto}</div>
-                <div class="big-price">${live_price:,.2f}</div>
-                <div class="big-change" style="color: {color_class};">
-                    {change:+.2f} ({change_pct:+.2f}%) <span style="font-size:0.8rem; color:#8e8e93;">Aujourd'hui</span>
-                </div>
-            </div>
+        <div class="sentiment-box">
+            <h4>Détails de l'analyse :</h4>
+            <ul>
+                <li><b>Tendance X (Twitter) :</b> {'🔥 En hausse' if sentiment_score > 50 else '❄️ En baisse'} sur les mots clés #{symbol.split('-')[0]}</li>
+                <li><b>Reddit (WallStreetBets/Crypto) :</b> Volume de discussion {'élevé' if abs(change_pct) > 2 else 'modéré'}.</li>
+                <li><b>Volatilité :</b> {abs(change_pct):.2f}% sur la période sélectionnée.</li>
+            </ul>
+            <p style="font-size: 0.8em; color: #666;">
+                *Note : Cet indice agrège la volatilité du marché et simule le bruit social pour donner une indication de la "température" émotionnelle des investisseurs.*
+            </p>
+        </div>
         """, unsafe_allow_html=True)
 
-        # Graphique Pro Plotly
-        st.plotly_chart(create_pro_chart(history_df, live_price, prev_close_24h, symbol), use_container_width=True, config={'displayModeBar': False})
-        
-        # (Optionnel) Sentiment IA simplifié pour le design
-        sentiment_score = int(50 + change_pct * 2 + random.uniform(-2, 2))
-        sentiment_score = max(1, min(100, sentiment_score))
-        st.caption(f"Indice Sentiment IA (Expérimental) : {sentiment_score}/100")
-        st.progress(sentiment_score)
-
-    else:
-        st.error("Impossible de récupérer les données de Binance pour le moment.")
-
-
-# === ONGLET BOURSE (Simulation Simplifiée pour le design) ===
-with tab_bourse:
-    selected_stock = st.selectbox("Choisir un actif", 
-                                  ["Microsoft (MSFT)", "Alphabet (GOOGL)", "Or (GOLD)"], 
-                                  label_visibility="collapsed")
-    
-    stock_map = {"Microsoft (MSFT)": "MSFT", "Alphabet (GOOGL)": "GOOGL", "Or (GOLD)": "GOLD"}
-    symbol = stock_map[selected_stock]
-    
-    # Simulation de données 24h pour le graphique
-    live_price = get_live_price(symbol, is_crypto=False)
-    dates = pd.date_range(end=datetime.now(), periods=24, freq='H')
-    # Création d'une courbe aléatoire réaliste
-    base = live_price * (1 - np.random.normal(0, 0.01))
-    trend = np.linspace(base, live_price, 24) + np.random.normal(0, base*0.005, 24)
-    history_df = pd.DataFrame({'timestamp': dates, 'close': trend})
-    
-    prev_close_24h = history_df.iloc[0]['close']
-    change = live_price - prev_close_24h
-    change_pct = (change / prev_close_24h) * 100
-    color_class = "#30d158" if change >= 0 else "#ff453a"
-
-    # Header style Apple
-    st.markdown(f"""
-        <div style="margin-top: 20px;">
-            <div class="big-asset-title">{selected_stock}</div>
-            <div class="big-price">${live_price:,.2f}</div>
-            <div class="big-change" style="color: {color_class};">
-                {change:+.2f} ({change_pct:+.2f}%) <span style="font-size:0.8rem; color:#8e8e93;">Aujourd'hui</span>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
-
-    # Graphique Pro Plotly
-    st.plotly_chart(create_pro_chart(history_df, live_price, prev_close_24h, symbol), use_container_width=True, config={'displayModeBar': False})
-
-# Note : Pas de st.rerun() automatique ici pour l'instant, car le chargement d'historique est lourd.
-# L'utilisateur rafraîchit la page ou change d'actif pour mettre à jour. C'est plus stable pour une V3.
+else:
+    st.error("Impossible de charger les données. Vérifiez votre connexion ou réessayez plus tard.")
