@@ -2,217 +2,195 @@ import streamlit as st
 import requests
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
 import time
 import random
 
-# --- 1. CONFIGURATION DU SITE ---
-st.set_page_config(
-    page_title="Blishko Trades",
-    page_icon="💎",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+# --- 1. CONFIGURATION & STYLE ---
+st.set_page_config(page_title="Blishko Trades", page_icon="📈", layout="wide")
 
-# --- 2. STYLE & TYPOGRAPHIE (CSS AVANCÉ) ---
+# CSS pour se rapprocher du style "Apple Bourse"
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700&display=swap');
-
-    html, body, [class*="css"]  {
-        font-family: 'Outfit', sans-serif;
-        background-color: #0E1117;
-    }
+    @import url('https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@400;600&display=swap');
     
-    h1 {
-        font-weight: 700;
-        letter-spacing: -1px;
+    html, body, [class*="css"] {
+        font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+        background-color: #000000; /* Noir profond style OLED */
         color: #ffffff;
-        text-align: center;
-        margin-bottom: 30px;
-    }
-
-    .metric-card {
-        background-color: #1c1f26;
-        padding: 20px;
-        border-radius: 12px;
-        border: 1px solid #2d3342;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-        margin-bottom: 20px;
-    }
-
-    .stProgress > div > div > div > div {
-        background-image: linear-gradient(to right, #ef4444, #eab308, #22c55e);
     }
     
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 20px;
-        justify-content: center;
+    /* Gros titres */
+    .big-asset-title { font-size: 2.5rem; font-weight: 700; margin-bottom: 0; line-height: 1.2; }
+    .big-price { font-size: 4rem; font-weight: 600; margin: 0; line-height: 1; }
+    .big-change { font-size: 1.5rem; font-weight: 500; margin-top: 5px; }
+    
+    /* Sélecteur d'actif stylisé */
+    .stSelectbox > div > div {
+        background-color: #1c1c1e; border: none; color: white; font-size: 1.2rem;
     }
-    .stTabs [data-baseweb="tab"] {
-        background-color: #1c1f26;
-        border-radius: 8px;
-        padding: 10px 30px;
-        color: white;
-        border: 1px solid #333;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #2962ff !important;
-        border-color: #2962ff !important;
-    }
+
+    /* Onglets de navigation */
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; background-color: #1c1c1e; padding: 5px; border-radius: 10px; }
+    .stTabs [data-baseweb="tab"] { height: 40px; border-radius: 7px; border: none; color: #8e8e93; }
+    .stTabs [aria-selected="true"] { background-color: #3a3a3c !important; color: white !important; }
+
+    /* Cacher les éléments inutiles de Streamlit */
+    #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("BLISHKO TRADES")
+# --- 2. FONCTIONS DE DONNÉES (Back-end) ---
 
-# --- 3. GESTION DES DONNÉES (SESSION STATE) ---
-if 'history' not in st.session_state:
-    st.session_state.history = {
-        'BTC': [], 'XRP': [], 'RENDER': [],
-        'MSFT': [], 'GOOGL': [], 'GOLD': []
-    }
-
-if 'prices' not in st.session_state:
-    st.session_state.prices = {
-        'MSFT': 402.50, 'GOOGL': 173.20, 'GOLD': 2045.00
-    }
-
-# --- 4. FONCTIONS ---
-
-def get_binance_price(symbol):
-    """Récupère le prix réel sur Binance"""
+@st.cache_data(ttl=60) # Met en cache l'historique pour 60 secondes pour éviter de spammer Binance
+def get_binance_history_24h(symbol):
+    """Récupère l'historique des 24 dernières heures (bougies 1h) sur Binance"""
+    # Cette fonction résout le problème de la courbe plate au démarrage
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval=1h&limit=24"
     try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT"
-        response = requests.get(url, timeout=2)
-        if response.status_code == 200:
-            return float(response.json()['price'])
-        return None
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        # Formatage des données pour Pandas
+        df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'etc', 'etc', 'etc', 'etc', 'etc', 'etc'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df['close'] = df['close'].astype(float)
+        return df[['timestamp', 'close']]
     except:
-        return None
+        # Si erreur, on renvoie un DataFrame vide pour ne pas faire planter
+        return pd.DataFrame(columns=['timestamp', 'close'])
 
-def simulate_market_move(current_price, volatility=0.0005):
-    """Simule la bourse (marché fermé le weekend ou données payantes)"""
-    change_percent = np.random.normal(0, volatility)
-    return current_price * (1 + change_percent)
-
-def calculate_stable_sentiment(history_list):
-    """Calcule un score stable (1-100)"""
-    if len(history_list) < 5:
-        return 50 
-    
-    current = history_list[-1]
-    average = sum(history_list[-10:]) / 10 if len(history_list) >= 10 else sum(history_list) / len(history_list)
-    
-    if average == 0: return 50 # Sécurité anti-crash
-
-    diff_percent = ((current - average) / average) * 1000
-    score = 50 + diff_percent
-    noise = random.uniform(-1, 1)
-    final_score = score + noise
-    
-    return int(max(1, min(100, final_score)))
-
-def display_asset(name, symbol, price, history, is_crypto=True):
-    """Affiche une carte complète pour un actif"""
-    
-    # 1. Sécurité : Si le prix est 0 (chargement), on affiche un message d'attente
-    if price == 0 or price is None:
-        st.warning(f"Chargement de {name}...")
-        return
-
-    # 2. Calcul variation (Sécurisé contre la division par zéro)
-    prev_price = history[-2] if len(history) > 1 else price
-    delta = price - prev_price
-    
-    if prev_price > 0:
-        delta_percent = (delta / prev_price) * 100
+def get_live_price(symbol, is_crypto=True):
+    """Récupère le dernier prix (Crypto=Réel, Bourse=Simulé)"""
+    if is_crypto:
+        try:
+            url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT"
+            return float(requests.get(url, timeout=2).json()['price'])
+        except: return None
     else:
-        delta_percent = 0.0
+        # Simulation Bourse (car API payantes)
+        base_prices = {'MSFT': 402.50, 'GOOGL': 173.20, 'GOLD': 2045.00}
+        volatility = 0.0005 if symbol != 'GOLD' else 0.0002
+        return base_prices.get(symbol, 100) * (1 + np.random.normal(0, volatility))
+
+# --- 3. FONCTION GRAPHIQUE PROFESSIONNELLE (Plotly) ---
+
+def create_pro_chart(df, current_price, prev_close, asset_name):
+    """Génère un graphique style 'Apple Bourse' avec Plotly"""
     
-    color = "green" if delta >= 0 else "red"
+    # Déterminer la couleur (Vert ou Rouge)
+    is_up = current_price >= prev_close
+    main_color = '#30d158' if is_up else '#ff453a' # Couleurs iOS
     
-    # 3. Affichage
-    with st.container():
-        st.markdown(f"""
-        <div class="metric-card">
-            <h3 style="margin:0; color:#aaa;">{name}</h3>
-            <h2 style="margin:0; font-size: 2em;">${price:,.4f}</h2>
-            <p style="color:{color}; margin:0;">{delta:+.4f} ({delta_percent:+.2f}%)</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Graphique
-        if len(history) > 2:
-            chart_data = pd.DataFrame(history, columns=["Prix"])
-            st.line_chart(chart_data, height=150, use_container_width=True)
-        
-        # Score de Sentiment
-        score = calculate_stable_sentiment(history)
-        st.write(f"**Indice de Confiance Marché : {score}/100**")
-        st.progress(score)
-        
-        txt = "Neutre"
-        if score > 60: txt = "Achat Fort (Bullish)"
-        elif score < 40: txt = "Vente Forte (Bearish)"
-        st.caption(f"Analyse: {txt}")
-        st.markdown("---")
+    # Création du graphique
+    fig = go.Figure()
 
-# --- 5. LOGIQUE PRINCIPALE ---
+    # Ajout de la ligne
+    fig.add_trace(go.Scatter(
+        x=df['timestamp'], y=df['close'],
+        mode='lines',
+        line=dict(color=main_color, width=3),
+        fill='tozeroy', # Remplissage sous la courbe
+        fillcolor=f"rgba({int(main_color[1:3], 16)}, {int(main_color[3:5], 16)}, {int(main_color[5:7], 16)}, 0.2)", # Couleur transparente
+        hoverinfo='x+y'
+    ))
 
-tab_crypto, tab_bourse = st.tabs(["₿ MARCHÉ CRYPTO", "📈 BOURSE & ACTIONS"])
+    # Configuration du layout (Axes invisibles, style épuré)
+    fig.update_layout(
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        margin=dict(l=0, r=0, t=0, b=0), height=350,
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, fixedrange=True, 
+                   range=[df['close'].min()*0.995, df['close'].max()*1.005]) # Zoom auto adapté
+    )
+    return fig
 
-# --- Mise à jour des données ---
-# Crypto (Vrais prix Binance)
-# Note : RENDER s'appelle parfois RNDR ou RENDER sur l'API, on tente RENDER
-btc = get_binance_price("BTC")
-xrp = get_binance_price("XRP")
-render = get_binance_price("RENDER") 
+# --- 4. INTERFACE UTILISATEUR (Front-end) ---
 
-# Ajout à l'historique seulement si on a reçu un prix valide
-if btc: st.session_state.history['BTC'].append(btc)
-if xrp: st.session_state.history['XRP'].append(xrp)
-if render: st.session_state.history['RENDER'].append(render)
+st.title("BLISHKO TRADES")
+tab_crypto, tab_bourse = st.tabs(["Crypto", "Actions & Matières"])
 
-# Bourse (Simulation)
-st.session_state.prices['MSFT'] = simulate_market_move(st.session_state.prices['MSFT'])
-st.session_state.prices['GOOGL'] = simulate_market_move(st.session_state.prices['GOOGL'])
-st.session_state.prices['GOLD'] = simulate_market_move(st.session_state.prices['GOLD'], volatility=0.0002)
-
-st.session_state.history['MSFT'].append(st.session_state.prices['MSFT'])
-st.session_state.history['GOOGL'].append(st.session_state.prices['GOOGL'])
-st.session_state.history['GOLD'].append(st.session_state.prices['GOLD'])
-
-# Nettoyage historique (max 100 points)
-for key in st.session_state.history:
-    if len(st.session_state.history[key]) > 100:
-        st.session_state.history[key].pop(0)
-
-# --- Affichage ---
-
+# === ONGLET CRYPTO ===
 with tab_crypto:
-    col1, col2, col3 = st.columns(3)
+    # Sélecteur style iOS
+    selected_crypto = st.selectbox("Choisir un actif", 
+                                   ["Bitcoin (BTC)", "Ripple (XRP)", "Render (RENDER)"], 
+                                   label_visibility="collapsed")
     
-    with col1:
-        # On récupère le dernier prix, ou 0 si la liste est vide
-        curr = st.session_state.history['BTC'][-1] if st.session_state.history['BTC'] else 0
-        display_asset("Bitcoin (BTC)", "BTC", curr, st.session_state.history['BTC'])
-        
-    with col2:
-        curr = st.session_state.history['XRP'][-1] if st.session_state.history['XRP'] else 0
-        display_asset("Ripple (XRP)", "XRP", curr, st.session_state.history['XRP'])
-        
-    with col3:
-        curr = st.session_state.history['RENDER'][-1] if st.session_state.history['RENDER'] else 0
-        display_asset("Render (RNDR)", "RENDER", curr, st.session_state.history['RENDER'])
+    symbol_map = {"Bitcoin (BTC)": "BTC", "Ripple (XRP)": "XRP", "Render (RENDER)": "RENDER"}
+    symbol = symbol_map[selected_crypto]
 
+    # 1. Récupération des données (Loader discret si besoin)
+    with st.spinner(f"Chargement des données 24h pour {symbol}..."):
+        history_df = get_binance_history_24h(symbol)
+        live_price = get_live_price(symbol, is_crypto=True)
+
+    # 2. Calculs et Affichage Principal
+    if live_price and not history_df.empty:
+        prev_close_24h = history_df.iloc[0]['close'] # Prix d'il y a 24h
+        change = live_price - prev_close_24h
+        change_pct = (change / prev_close_24h) * 100
+        color_class = "#30d158" if change >= 0 else "#ff453a"
+
+        # Header style Apple
+        st.markdown(f"""
+            <div style="margin-top: 20px;">
+                <div class="big-asset-title">{selected_crypto}</div>
+                <div class="big-price">${live_price:,.2f}</div>
+                <div class="big-change" style="color: {color_class};">
+                    {change:+.2f} ({change_pct:+.2f}%) <span style="font-size:0.8rem; color:#8e8e93;">Aujourd'hui</span>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+
+        # Graphique Pro Plotly
+        st.plotly_chart(create_pro_chart(history_df, live_price, prev_close_24h, symbol), use_container_width=True, config={'displayModeBar': False})
+        
+        # (Optionnel) Sentiment IA simplifié pour le design
+        sentiment_score = int(50 + change_pct * 2 + random.uniform(-2, 2))
+        sentiment_score = max(1, min(100, sentiment_score))
+        st.caption(f"Indice Sentiment IA (Expérimental) : {sentiment_score}/100")
+        st.progress(sentiment_score)
+
+    else:
+        st.error("Impossible de récupérer les données de Binance pour le moment.")
+
+
+# === ONGLET BOURSE (Simulation Simplifiée pour le design) ===
 with tab_bourse:
-    col_a, col_b, col_c = st.columns(3)
-    with col_a:
-        display_asset("Microsoft (MSFT)", "MSFT", st.session_state.prices['MSFT'], st.session_state.history['MSFT'], is_crypto=False)
-    with col_b:
-        display_asset("Alphabet (GOOGL)", "GOOGL", st.session_state.prices['GOOGL'], st.session_state.history['GOOGL'], is_crypto=False)
-    with col_c:
-        display_asset("Or (Gold)", "GOLD", st.session_state.prices['GOLD'], st.session_state.history['GOLD'], is_crypto=False)
+    selected_stock = st.selectbox("Choisir un actif", 
+                                  ["Microsoft (MSFT)", "Alphabet (GOOGL)", "Or (GOLD)"], 
+                                  label_visibility="collapsed")
+    
+    stock_map = {"Microsoft (MSFT)": "MSFT", "Alphabet (GOOGL)": "GOOGL", "Or (GOLD)": "GOLD"}
+    symbol = stock_map[selected_stock]
+    
+    # Simulation de données 24h pour le graphique
+    live_price = get_live_price(symbol, is_crypto=False)
+    dates = pd.date_range(end=datetime.now(), periods=24, freq='H')
+    # Création d'une courbe aléatoire réaliste
+    base = live_price * (1 - np.random.normal(0, 0.01))
+    trend = np.linspace(base, live_price, 24) + np.random.normal(0, base*0.005, 24)
+    history_df = pd.DataFrame({'timestamp': dates, 'close': trend})
+    
+    prev_close_24h = history_df.iloc[0]['close']
+    change = live_price - prev_close_24h
+    change_pct = (change / prev_close_24h) * 100
+    color_class = "#30d158" if change >= 0 else "#ff453a"
 
-# Rechargement automatique
-time.sleep(1.5)
-st.rerun()
+    # Header style Apple
+    st.markdown(f"""
+        <div style="margin-top: 20px;">
+            <div class="big-asset-title">{selected_stock}</div>
+            <div class="big-price">${live_price:,.2f}</div>
+            <div class="big-change" style="color: {color_class};">
+                {change:+.2f} ({change_pct:+.2f}%) <span style="font-size:0.8rem; color:#8e8e93;">Aujourd'hui</span>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # Graphique Pro Plotly
+    st.plotly_chart(create_pro_chart(history_df, live_price, prev_close_24h, symbol), use_container_width=True, config={'displayModeBar': False})
+
+# Note : Pas de st.rerun() automatique ici pour l'instant, car le chargement d'historique est lourd.
+# L'utilisateur rafraîchit la page ou change d'actif pour mettre à jour. C'est plus stable pour une V3.
